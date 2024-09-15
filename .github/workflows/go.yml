@@ -1,29 +1,50 @@
-# This workflow will build a golang project
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
-
-name: Go
+name: Go Build
 
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
   pull_request:
-    branches: [ "main" ]
-  workflow_dispatch: 
+    branches:
+      - main
 
 jobs:
-
   build:
     runs-on: ubuntu-latest
+
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v3
 
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: '1.20'
+        go-version: 1.23.0
 
-    - name: Build
-      run: go build -v ./...
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: go-mod-${{ hashFiles('go.sum') }}
+        restore-keys: |
+          go-mod-
 
-    - name: Test
-      run: go test -v ./...
+    - name: Install dependencies
+      run: go mod download
+
+    - name: Build the project
+      run: go build -v -o esf-payment-backend .
+
+    - name: Copy config.yaml
+      run: cp config.yaml ./esf-payment-backend-config.yaml
+
+    - name: Package the binary and config
+      run: zip -r esf-payment-backend.zip esf-payment-backend esf-payment-backend-config.yaml
+
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: go-build-package
+        path: ./esf-payment-backend.zip
