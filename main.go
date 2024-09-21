@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/md5"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -85,20 +87,63 @@ func login(c *gin.Context) {
 	ip := c.ClientIP()
 	operation := "login"
 
-	username := c.PostForm("username")
-	password := c.PostForm("password")
+	username := c.Request.URL.Query().Get("username")
+	password := c.Request.URL.Query().Get("password")
 
 	var user User
+	var token sql.NullString // 用于捕获 token 字段的值
+
+	// 查询用户信息
 	query := fmt.Sprintf("SELECT id, username, password, balance, token FROM %susers WHERE username=? AND password=?", config.MySQL.Prefix)
-	err := db.QueryRow(query, username, password).Scan(&user.ID, &user.Username, &user.Password, &user.Balance, &user.Token)
+	err := db.QueryRow(query, username, password).Scan(&user.ID, &user.Username, &user.Password, &user.Balance, &token)
 	if err != nil {
 		logOperation(ip, operation)
 		c.JSON(http.StatusUnauthorized, gin.H{"status": "unauthorized"})
 		return
 	}
 
-	logOperation(ip, operation)
-	c.JSON(http.StatusOK, gin.H{"status": "success", "token": user.Token})
+	// 检查 token 是否为 NULL
+	if !token.Valid {
+		// token 字段为 NULL，将 'A' 插入到 token 字段
+		updateQuery := fmt.Sprintf("UPDATE %susers SET token=? WHERE id=?", config.MySQL.Prefix)
+		_, err = db.Exec(updateQuery, genToken(), user.ID)
+		if err != nil {
+			log.Printf("Failed to update token: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"status": "failed to update token"})
+			return
+		}
+	} else {
+		// 如果 token 不为 NULL，就更新他
+		updateQuery := fmt.Sprintf("UPDATE %susers SET token=? WHERE id=?", config.MySQL.Prefix)
+		_, err = db.Exec(updateQuery, genToken(), user.ID)
+		if err != nil {
+			log.Printf("Failed to update token: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"status": "failed to update token"})
+			return
+		}
+	}
+	err = db.QueryRow(query, username, password).Scan(&user.ID, &user.Username, &user.Password, &user.Balance, &token)
+	if err != nil {
+		logOperation(ip, operation)
+		c.JSON(http.StatusUnauthorized, gin.H{"status": "unauthorized"})
+		return
+	}
+	// 返回成功响应
+	c.JSON(http.StatusOK, gin.H{
+		"status": "successfully",
+		"token":  token.String,
+	})
+
+}
+
+func genToken() string {
+	now := time.Now()
+	fiveMinutesLater := now.Add(5 * time.Minute)
+	unixTimestamp := fiveMinutesLater.Unix()
+	timestampStr := fmt.Sprintf("%d", unixTimestamp)
+	hash := md5.Sum([]byte(timestampStr))
+	hashStr := hex.EncodeToString(hash[:])
+	return hashStr
 }
 
 // 更改密码功能
