@@ -1,59 +1,87 @@
-name: Go Cross-Build
+name: Build
 
 on:
+  workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main]
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/*.yml"
   pull_request:
-    branches:
-      - main
+    types: [opened, synchronize, reopened]
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/*.yml"
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-
     strategy:
       matrix:
-        os: [linux, windows, darwin]
-        arch: [amd64, arm64]
-        go-version: [1.23.0]
+        goos: [windows, linux]
+        goarch: [amd64]
+      fail-fast: false
 
+    runs-on: ubuntu-20.04
+    env:
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      GOARM: ${{ matrix.goarm }}
+      CGO_ENABLED: 0
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
+      - name: Checkout codebase
+        uses: actions/checkout@v3
 
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: ${{ matrix.go-version }}
+      - name: Show workflow information
+        run: |
+          export _NAME=$(jq ".[\"$GOOS-$GOARCH$GOARM$GOMIPS\"].friendlyName" -r < .github/build/friendly-filenames.json)
+          echo "GOOS: $GOOS, GOARCH: $GOARCH, GOARM: $GOARM, GOMIPS: $GOMIPS, RELEASE_NAME: $_NAME"
+          echo "ASSET_NAME=$_NAME" >> $GITHUB_ENV
 
-    - name: Cache Go modules
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cache/go-build
-          ~/go/pkg/mod
-        key: go-mod-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('go.sum') }}
-        restore-keys: |
-          go-mod-${{ matrix.os }}-${{ matrix.arch }}-
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.20"
+          check-latest: true
 
-    - name: Install dependencies
-      run: go mod download
+      - name: Get project dependencies
+        run: go mod download
 
-    - name: Cross-build the project
-      run: |
-        GOOS=${{ matrix.os }}
-        GOARCH=${{ matrix.arch }}
-        go build -v -o esf-payment-backend-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.os == 'windows' && '.exe' || '' }} .
+      - name: Build
+        run: |
+          mkdir -p build_assets
+          go build -v -o build_assets/esf-payment-backend -trimpath -ldflags "-s -w" ./main.go
 
-    - name: Copy config.yaml
-      run: cp config.yaml ./esf-payment-backend-config.yaml
+      - name: Rename Windows
+        if: matrix.goos == 'windows'
+        run: |
+          cd ./build_assets || exit 1
+          mv esf-payment-backend esf-payment-backend.exe
 
-    - name: Package the binary and config
-      run: zip -r esf-payment-backend-${{ matrix.os }}-${{ matrix.arch }}.zip esf-payment-backend-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.os == 'windows' && '.exe' || '' }} esf-payment-backend-config.yaml
+      - name: Create ZIP archive
+        shell: bash
+        run: |
+          pushd build_assets || exit 1
+          touch -mt $(date +%Y01010000) *
+          zip -9vr ../esf-payment-backend-${{ env.ASSET_NAME }}.zip .
+          popd || exit 1
+          FILE=./esf-payment-backend-${{ env.ASSET_NAME }}.zip
+          DGST=$FILE.dgst
+          for METHOD in {"md5","sha1","sha256","sha512"}
+          do
+            openssl dgst -$METHOD $FILE | sed 's/([^)]*)//g' >>$DGST
+          done
 
-    - name: Upload build artifact
-      uses: actions/upload-artifact@v3
-      with:
-        name: go-build-package-${{ matrix.os }}-${{ matrix.arch }}
-        path: ./esf-payment-backend-${{ matrix.os }}-${{ matrix.arch }}.zip
+      - name: Change the name
+        run: |
+          mv build_assets esf-payment-backend-${{ env.ASSET_NAME }}
+
+      - name: Upload files to Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: esf-payment-backend-${{ env.ASSET_NAME }}
+          path: |
+            ./esf-payment-backend-${{ env.ASSET_NAME }}/*
