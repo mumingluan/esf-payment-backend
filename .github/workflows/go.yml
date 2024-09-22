@@ -12,6 +12,12 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        arch: [amd64, arm64]
+        go-version: [1.23.0]
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
@@ -19,7 +25,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: 1.23.0
+        go-version: ${{ matrix.go-version }}
 
     - name: Cache Go modules
       uses: actions/cache@v3
@@ -27,24 +33,24 @@ jobs:
         path: |
           ~/.cache/go-build
           ~/go/pkg/mod
-        key: go-mod-${{ hashFiles('go.sum') }}
+        key: go-mod-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('go.sum') }}
         restore-keys: |
-          go-mod-
+          go-mod-${{ matrix.os }}-${{ matrix.arch }}-
 
     - name: Install dependencies
       run: go mod download
 
     - name: Build the project
-      run: go build -v -o esf-payment-backend .
-
-    - name: Copy config.yaml
-      run: cp config.yaml ./esf-payment-backend-config.yaml
+      run: |
+        GOOS=${{ matrix.os == 'ubuntu-latest' && 'linux' || (matrix.os == 'windows-latest' && 'windows' || 'darwin') }}
+        GOARCH=${{ matrix.arch }}
+        go build -v -o esf-payment-backend-${{ matrix.os }}-${{ matrix.arch }} .
 
     - name: Package the binary and config
-      run: zip -r esf-payment-backend.zip esf-payment-backend esf-payment-backend-config.yaml
+      run: zip -r esf-payment-backend-${{ matrix.os }}-${{ matrix.arch }}.zip esf-payment-backend-${{ matrix.os }}-${{ matrix.arch }} config.yaml
 
     - name: Upload build artifact
       uses: actions/upload-artifact@v3
       with:
-        name: go-build-package
-        path: ./esf-payment-backend.zip
+        name: go-build-package-${{ matrix.os }}-${{ matrix.arch }}
+        path: ./esf-payment-backend-${{ matrix.os }}-${{ matrix.arch }}.zip
